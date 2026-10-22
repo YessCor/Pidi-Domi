@@ -1,6 +1,9 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { CartItem } from '../../types';
+
+const CART_STORAGE_KEY = '@domicilios:cart';
 
 interface CartValue {
   items: CartItem[];
@@ -17,6 +20,31 @@ const CartContext = createContext<CartValue | undefined>(undefined);
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Cargar carrito persistido al iniciar
+  useEffect(() => {
+    AsyncStorage.getItem(CART_STORAGE_KEY)
+      .then((raw) => {
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw) as CartItem[];
+            // Validar que los productos tengan la estructura correcta
+            if (Array.isArray(parsed)) setItems(parsed);
+          } catch {
+            // Ignorar datos corruptos
+          }
+        }
+      })
+      .finally(() => setHydrated(true));
+  }, []);
+
+  // Persistir cambios
+  useEffect(() => {
+    if (hydrated) {
+      AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items)).catch(() => {});
+    }
+  }, [items, hydrated]);
 
   const addWithPrompt = useCallback(
     (newItems: CartItem[]) => {
@@ -73,6 +101,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }),
     [items, addWithPrompt, setQuantity, clear]
   );
+
+  if (!hydrated) {
+    return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
+  }
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

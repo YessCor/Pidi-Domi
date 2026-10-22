@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { Alert, FlatList, StyleSheet, Text, TextInput, View, Platform } from 'react-native';
+import * as Location from 'expo-location';
 import { useAuth } from '../../../context/AuthContext';
 import { supabase } from '../../../services/supabase';
 import { Btn, colors, money } from '../../shared/ui';
-import { DELIVERY_FEE, fakeDeliveryCoords } from '../../shared/config';
+import { DELIVERY_FEE } from '../../shared/config';
 import { useCart } from '../CartContext';
 
 export default function CartScreen() {
@@ -11,7 +12,27 @@ export default function CartScreen() {
   const { user, isMock } = useAuth();
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
+  const [gettingLocation, setGettingLocation] = useState(false);
   const total = items.length ? subtotal + DELIVERY_FEE : 0;
+
+  const getCurrentLocation = useCallback(async () => {
+    setGettingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso de ubicación', 'Necesitamos tu ubicación para calcular la entrega. Actívalo en ajustes.');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      // Geocodificación simple: mostramos coords; en producción usarías Google Maps Geocoding API
+      setAddress(`Lat: ${loc.coords.latitude.toFixed(6)}, Lng: ${loc.coords.longitude.toFixed(6)}`);
+    } catch (e) {
+      console.warn('Error obteniendo ubicación:', e);
+      Alert.alert('No se pudo obtener la ubicación', 'Intenta de nuevo o escribe la dirección manualmente.');
+    } finally {
+      setGettingLocation(false);
+    }
+  }, []);
 
   const placeOrder = async () => {
     if (!user || !storeId || items.length === 0) return;
@@ -23,7 +44,12 @@ export default function CartScreen() {
     setBusy(true);
     let orderId: string | null = null;
     try {
-      const coords = fakeDeliveryCoords(); // TODO: reemplazar por ubicación real (expo-location)
+      // Parse coords from address if in "Lat: x, Lng: y" format
+      const coordMatch = address.match(/Lat:\s*([-\d.]+),\s*Lng:\s*([-\d.]+)/);
+      const coords = coordMatch
+        ? { latitude: parseFloat(coordMatch[1]), longitude: parseFloat(coordMatch[2]) }
+        : { latitude: 4.711, longitude: -74.0721 }; // fallback Bogotá
+
       const { data: order, error } = await supabase
         .from('orders')
         .insert({
@@ -85,7 +111,10 @@ export default function CartScreen() {
           </View>
         )}
       />
-      <TextInput style={s.input} placeholder="Dirección de entrega" value={address} onChangeText={setAddress} />
+      <View style={s.addressRow}>
+        <TextInput style={s.input} placeholder="Dirección de entrega" value={address} onChangeText={setAddress} />
+        <Btn title={gettingLocation ? '📍 Obteniendo...' : '📍 Mi ubicación'} variant="outline" onPress={getCurrentLocation} disabled={gettingLocation || Platform.OS === 'web'} />
+      </View>
       <Text style={s.line}>Subtotal: {money(subtotal)}</Text>
       <Text style={s.line}>Domicilio: {money(items.length ? DELIVERY_FEE : 0)}</Text>
       <Text style={s.total}>Total: {money(total)}</Text>
@@ -101,7 +130,8 @@ const s = StyleSheet.create({
   name: { fontWeight: '700' },
   price: { color: colors.primary },
   qty: { minWidth: 24, textAlign: 'center', fontWeight: '700' },
-  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12 },
+  input: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12 },
+  addressRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   line: { textAlign: 'right', color: colors.muted },
   total: { fontSize: 18, fontWeight: '800', textAlign: 'right' },
   empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },

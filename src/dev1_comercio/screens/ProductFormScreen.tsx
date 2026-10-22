@@ -23,7 +23,7 @@ export default function ProductFormScreen({ route, navigation }: Props) {
   const pickImage = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) return Alert.alert('Permiso denegado', 'Necesitamos acceso a tu galería.');
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [1, 1] });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7, allowsEditing: true, aspect: [1, 1] });
     if (!res.canceled) setLocalUri(res.assets[0].uri);
   };
 

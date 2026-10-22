@@ -1,4 +1,4 @@
-import type { Order, Product, Store } from '../types';
+import type { Order, Product, Store } from '../../types';
 import { DEFAULT_COORDS } from './config';
 
 export const MOCK_STORE: Store = {
