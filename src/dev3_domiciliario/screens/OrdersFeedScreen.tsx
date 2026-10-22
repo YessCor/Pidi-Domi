@@ -1,17 +1,24 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, StyleSheet, Text, View } from 'react-native';
+import BottomSheet from '@gorhom/bottom-sheet';
 import { useAuth } from '../../../context/AuthContext';
 import { supabase } from '../../../services/supabase';
 import { Btn, colors, money } from '../../shared/ui';
 import { MOCK_ORDERS } from '../../shared/mockData';
+import DriverStatusSwitch from '../components/DriverStatusSwitch';
+import OrdersBottomSheet from '../components/OrdersBottomSheet';
 import type { DriverStatus, OrderWithStore } from '../../../types';
 
 function OrderCard({ o, children }: { o: OrderWithStore; children?: React.ReactNode }) {
   return (
     <View style={s.card}>
-      <Text style={s.store}>🏪 {o.stores?.name ?? 'Comercio'} · {o.store_status}</Text>
+      <Text style={s.store}>
+        🏪 {o.stores?.name ?? 'Comercio'} · {o.store_status}
+      </Text>
       <Text style={s.addr}>📍 {o.delivery_address}</Text>
-      <Text style={s.total}>{money(o.total)} · envío {money(o.delivery_fee)} · {o.delivery_status}</Text>
+      <Text style={s.total}>
+        {money(o.total)} · envío {money(o.delivery_fee)} · {o.delivery_status}
+      </Text>
       {children}
     </View>
   );
@@ -23,11 +30,19 @@ export default function OrdersFeedScreen() {
   const [active, setActive] = useState<OrderWithStore[]>([]);
   const [driverStatus, setDriverStatus] = useState<DriverStatus>('INACTIVO');
   const [loading, setLoading] = useState(false);
+  const sheetRef = useRef<BottomSheet>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
     if (isMock) {
-      setAvailable((cur) => (cur.length || active.length ? cur : MOCK_ORDERS.map((o) => ({ ...o, stores: { name: 'Burger Demo', latitude: o.delivery_latitude, longitude: o.delivery_longitude } }))));
+      setAvailable((cur) =>
+        cur.length || active.length
+          ? cur
+          : MOCK_ORDERS.map((o) => ({
+              ...o,
+              stores: { name: 'Burger Demo', latitude: o.delivery_latitude, longitude: o.delivery_longitude },
+            }))
+      );
       return;
     }
     setLoading(true);
@@ -44,6 +59,8 @@ export default function OrdersFeedScreen() {
     if (d.data) setDriverStatus(d.data.status as DriverStatus);
   }, [user, isMock, active.length]);
 
+  // Sprint 3 · Realtime: cualquier cambio en 'orders' (nuevo pedido SIN_ASIGNAR, otro repartidor
+  // tomándolo, el comercio marcándolo LISTO, etc.) refresca este feed sin recargar la pantalla.
   useEffect(() => {
     load();
     if (isMock) return;
@@ -51,7 +68,9 @@ export default function OrdersFeedScreen() {
       .channel('driver-feed')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => {
+      supabase.removeChannel(ch);
+    };
   }, [load, isMock]);
 
   const updateDriver = async (status: DriverStatus) => {
@@ -63,10 +82,12 @@ export default function OrdersFeedScreen() {
 
   const accept = async (o: OrderWithStore) => {
     if (!user) return;
+    // Sprint 2 · Bloqueo de UI: no se puede aceptar más de un pedido a la vez.
     if (active.length > 0) return Alert.alert('Ya tienes una entrega en curso', 'Termínala antes de aceptar otra.');
     if (isMock) {
       setAvailable((l) => l.filter((x) => x.id !== o.id));
       setActive([{ ...o, driver_id: user.id, delivery_status: 'ACEPTADO' }]);
+      sheetRef.current?.snapToIndex(0);
       return setDriverStatus('OCUPADO');
     }
     // Solo si sigue SIN_ASIGNAR (evita que dos repartidores tomen el mismo pedido)
@@ -82,21 +103,27 @@ export default function OrdersFeedScreen() {
       return load();
     }
     await updateDriver('OCUPADO');
+    sheetRef.current?.snapToIndex(0);
     load();
   };
 
   const advance = async (o: OrderWithStore) => {
+    // Sprint 3 · Ciclo de entrega: ACEPTADO -> EN_CAMINO -> ENTREGADO.
     const next = o.delivery_status === 'ACEPTADO' ? 'EN_CAMINO' : 'ENTREGADO';
     if (isMock) {
       if (next === 'ENTREGADO') {
         setActive([]);
         setDriverStatus('DISPONIBLE');
+        sheetRef.current?.snapToIndex(1);
       } else setActive([{ ...o, delivery_status: next }]);
       return;
     }
     const { error } = await supabase.from('orders').update({ delivery_status: next }).eq('id', o.id);
     if (error) return Alert.alert('Error', error.message);
-    if (next === 'ENTREGADO') await updateDriver('DISPONIBLE');
+    if (next === 'ENTREGADO') {
+      await updateDriver('DISPONIBLE');
+      sheetRef.current?.snapToIndex(1);
+    }
     load();
   };
 
@@ -108,14 +135,10 @@ export default function OrdersFeedScreen() {
       </View>
 
       <View style={s.statusRow}>
-        <Text style={s.status}>Estado: {driverStatus}</Text>
-        {driverStatus !== 'OCUPADO' && (
-          <Btn
-            title={driverStatus === 'DISPONIBLE' ? 'Ponerme inactivo' : 'Ponerme disponible'}
-            variant="outline"
-            onPress={() => updateDriver(driverStatus === 'DISPONIBLE' ? 'INACTIVO' : 'DISPONIBLE')}
-          />
-        )}
+        <DriverStatusSwitch
+          value={driverStatus}
+          onChange={(next) => updateDriver(next)}
+        />
       </View>
 
       <Text style={s.section}>Mi entrega en curso</Text>
@@ -134,18 +157,14 @@ export default function OrdersFeedScreen() {
         );
       })}
 
-      <Text style={s.section}>Disponibles</Text>
-      <FlatList
-        data={available}
-        keyExtractor={(o) => o.id}
-        refreshing={loading}
+      {/* Sprint 2 · Panel deslizable con los pedidos SIN_ASIGNAR */}
+      <OrdersBottomSheet
+        ref={sheetRef}
+        orders={available}
+        loading={loading}
+        disabled={active.length > 0}
         onRefresh={load}
-        ListEmptyComponent={<Text style={s.empty}>No hay pedidos disponibles.</Text>}
-        renderItem={({ item }) => (
-          <OrderCard o={item}>
-            <Btn title="Aceptar pedido" onPress={() => accept(item)} />
-          </OrderCard>
-        )}
+        onAccept={accept}
       />
     </View>
   );
@@ -155,8 +174,7 @@ const s = StyleSheet.create({
   container: { flex: 1, padding: 16, paddingTop: 56, backgroundColor: colors.bg },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { fontSize: 24, fontWeight: '800' },
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  status: { fontWeight: '700' },
+  statusRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', marginTop: 8 },
   section: { fontWeight: '800', fontSize: 16, marginTop: 12, marginBottom: 6 },
   card: { backgroundColor: '#fff', padding: 12, borderRadius: 12, marginBottom: 10, gap: 6 },
   store: { fontWeight: '700' },

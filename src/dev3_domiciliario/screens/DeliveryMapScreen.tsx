@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import * as Location from 'expo-location';
 import { useAuth } from '../../../context/AuthContext';
 import { supabase } from '../../../services/supabase';
 import { colors } from '../../shared/ui';
@@ -22,20 +23,74 @@ export default function DeliveryMapScreen() {
   const { user, isMock } = useAuth();
   const [order, setOrder] = useState<OrderWithStore | null>(null);
   const [t, setT] = useState(0);
+  // Sprint 1 · Permiso de ubicación (opcional/mock): no bloquea la app si se niega o no hay
+  // soporte del dispositivo; el mapa siempre puede seguir mostrando la ruta simulada.
+  const [locationStatus, setLocationStatus] = useState<'checking' | 'granted' | 'denied' | 'unavailable'>('checking');
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (mounted) setLocationStatus(status === 'granted' ? 'granted' : 'denied');
+      } catch {
+        if (mounted) setLocationStatus('unavailable');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const fetchActiveOrder = useCallback(async () => {
+    if (!user || isMock) return;
+    const { data } = await supabase
+      .from('orders')
+      .select('*, stores(name, latitude, longitude)')
+      .eq('driver_id', user.id)
+      .in('delivery_status', ['ACEPTADO', 'EN_CAMINO'])
+      .limit(1)
+      .maybeSingle();
+    setOrder((data as OrderWithStore) ?? null);
+    setT(0);
+  }, [user, isMock]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!user || isMock) return;
-      supabase
-        .from('orders')
-        .select('*, stores(name, latitude, longitude)')
-        .eq('driver_id', user.id)
-        .in('delivery_status', ['ACEPTADO', 'EN_CAMINO'])
-        .limit(1)
-        .maybeSingle()
-        .then(({ data }) => { setOrder((data as OrderWithStore) ?? null); setT(0); });
-    }, [user, isMock])
+      fetchActiveOrder();
+    }, [fetchActiveOrder])
   );
+
+  // Sprint 3 · Realtime: cuando el estado del pedido activo cambia (p.ej. se acepta uno nuevo
+  // desde el feed, o se marca ENTREGADO), el mapa se sincroniza solo, sin recargar la pantalla.
+  useEffect(() => {
+    if (!user || isMock) return;
+    const ch = supabase
+      .channel(`driver-map-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders', filter: `driver_id=eq.${user.id}` },
+        (payload) => {
+          const updated = payload.new as OrderWithStore | undefined;
+          if (!updated || !['ACEPTADO', 'EN_CAMINO'].includes(updated.delivery_status)) {
+            setOrder(null);
+            return;
+          }
+          setOrder((prev) => {
+            setT(0);
+            // El payload de Realtime no trae el join de "stores"; si ya teníamos ese pedido
+            // cargado conservamos sus datos de tienda, si es uno nuevo lo volvemos a pedir.
+            if (prev && prev.id === updated.id) return { ...prev, ...updated };
+            fetchActiveOrder();
+            return prev;
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [user, isMock, fetchActiveOrder]);
 
   useEffect(() => {
     const id = setInterval(() => setT((p) => (p >= STEPS ? 0 : p + 1)), 500);
@@ -71,6 +126,13 @@ export default function DeliveryMapScreen() {
           {order ? (toStore ? 'Hacia el comercio' : 'Hacia el cliente') : 'Ruta demo'} · simulado {Math.round((t / STEPS) * 100)}%
         </Text>
       </View>
+      {locationStatus !== 'granted' && (
+        <View style={s.gpsBadge}>
+          <Text style={s.gpsBadgeText}>
+            {locationStatus === 'checking' ? 'Verificando GPS…' : 'Ubicación 100% simulada (sin permiso de GPS)'}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -78,4 +140,6 @@ export default function DeliveryMapScreen() {
 const s = StyleSheet.create({
   badge: { position: 'absolute', top: 56, alignSelf: 'center', backgroundColor: '#fff', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, elevation: 4 },
   badgeText: { fontWeight: '700' },
+  gpsBadge: { position: 'absolute', bottom: 24, alignSelf: 'center', backgroundColor: '#00000099', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+  gpsBadgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
 });
