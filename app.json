@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Domicilios",
+    "slug": "domicilios-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "domicilios",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.equipo.domicilios",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Necesitamos el micrófono para tomar tu pedido por voz.",
+        "NSPhotoLibraryUsageDescription": "Necesitamos tu galería para subir fotos de productos."
+      }
+    },
+    "android": {
+      "package": "com.equipo.domicilios",
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "plugins": [
+      ["expo-audio", { "microphonePermission": "Necesitamos el micrófono para tomar tu pedido por voz." }],
+      ["expo-image-picker", { "photosPermission": "Necesitamos tu galería para subir fotos de productos." }]
+    ]
+  }
+}
